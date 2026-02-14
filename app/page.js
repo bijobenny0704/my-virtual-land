@@ -1,66 +1,119 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Stars, Html } from '@react-three/drei';
+import { OrbitControls, Stars, Html, PerspectiveCamera } from '@react-three/drei';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 
 // --- CONFIGURATION ---
-const GRID_SIZE = 10; // 10x10 Grid
+const GRID_SIZE = 12; // Larger world
 const PLOT_SIZE = 1.0;
-const GAP = 0.1; // Gap between plots
+const GAP = 0.15;
+
+// --- COMPONENT: Holographic Building ---
+// This creates a random skyscraper on the land
+const Building = ({ height, color }) => {
+  return (
+    <group position={[0, height / 2, 0]}>
+      {/* Main Tower */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[0.7, height, 0.7]} />
+        <meshStandardMaterial 
+          color={color} 
+          emissive={color} 
+          emissiveIntensity={0.8} 
+          roughness={0.1} 
+          metalness={0.9} 
+          transparent 
+          opacity={0.9}
+        />
+      </mesh>
+      {/* Glowing Top Line */}
+      <mesh position={[0, height / 2 + 0.05, 0]}>
+        <boxGeometry args={[0.75, 0.1, 0.75]} />
+        <meshBasicMaterial color="#ffffff" />
+      </mesh>
+    </group>
+  );
+};
 
 // --- COMPONENT: Single Land Plot ---
-const LandPlot = ({ position, id, isSelected, onClick }) => {
-  // State for hover effect
+const LandPlot = ({ position, id, type, height, onClick, isSelected }) => {
   const [hovered, setHover] = useState(false);
   const meshRef = useRef();
 
-  // Animation: Gentle float when hovered
+  // Gentle floating animation
   useFrame((state) => {
-    if (meshRef.current) {
-      const targetY = hovered ? 0.2 : 0;
-      meshRef.current.position.y = THREE.MathUtils.lerp(meshRef.current.position.y, targetY, 0.1);
+    if (meshRef.current && hovered) {
+      meshRef.current.position.y = THREE.MathUtils.lerp(meshRef.current.position.y, 0.2, 0.1);
+    } else if (meshRef.current) {
+      meshRef.current.position.y = THREE.MathUtils.lerp(meshRef.current.position.y, 0, 0.1);
     }
   });
 
-  // Color Logic
-  const baseColor = "#1a1a1a"; // Dark grey (Unsold)
-  const hoverColor = "#00f3ff"; // Neon Cyan (Hover)
-  const selectedColor = "#bd00ff"; // Purple (Selected)
+  // Determine Colors based on Type
+  let baseColor = "#050505"; // Empty Land (Black)
+  let glowColor = "#000"; 
+  
+  if (type === 'residential') {
+    baseColor = "#001a33"; // Deep Blue
+    glowColor = "#00aaff"; // Cyan Glow
+  } else if (type === 'commercial') {
+    baseColor = "#1a0033"; // Deep Purple
+    glowColor = "#bd00ff"; // Purple Glow
+  } else if (isSelected) {
+    baseColor = "#330000";
+    glowColor = "#ff0000";
+  }
+
+  // Hover Effect Override
+  if (hovered) glowColor = "#ffffff"; 
 
   return (
     <group position={position}>
       <mesh
         ref={meshRef}
-        onClick={(e) => {
-          e.stopPropagation(); // Prevent clicking through to background
-          onClick(id);
-        }}
+        onClick={(e) => { e.stopPropagation(); onClick(id); }}
         onPointerOver={() => setHover(true)}
         onPointerOut={() => setHover(false)}
       >
-        {/* The Land Block */}
-        <boxGeometry args={[PLOT_SIZE, 0.2, PLOT_SIZE]} />
-        <meshStandardMaterial
-          color={isSelected ? selectedColor : hovered ? hoverColor : baseColor}
-          metalness={0.6}
+        {/* The Base Plot */}
+        <boxGeometry args={[PLOT_SIZE, 0.1, PLOT_SIZE]} />
+        <meshStandardMaterial 
+          color={baseColor} 
+          emissive={glowColor} 
+          emissiveIntensity={hovered ? 0.5 : 2}
           roughness={0.2}
-          emissive={isSelected ? selectedColor : hovered ? hoverColor : "#000"}
-          emissiveIntensity={0.5}
+          metalness={0.8}
         />
         
-        {/* Glowing Borders (Tron Style) */}
+        {/* Glowing Edge Lines (Tron Style) */}
         <lineSegments>
-          <edgesGeometry args={[new THREE.BoxGeometry(PLOT_SIZE, 0.2, PLOT_SIZE)]} />
-          <lineBasicMaterial color={isSelected ? "#fff" : "#333"} />
+          <edgesGeometry args={[new THREE.BoxGeometry(PLOT_SIZE, 0.1, PLOT_SIZE)]} />
+          <lineBasicMaterial color={type === 'empty' ? "#333" : glowColor} opacity={0.5} transparent />
         </lineSegments>
+
+        {/* Render Building if not empty */}
+        {type !== 'empty' && (
+          <Building height={height} color={glowColor} />
+        )}
       </mesh>
 
-      {/* Show ID on Hover */}
+      {/* Info Tag */}
       {hovered && (
-        <Html distanceFactor={10}>
-          <div style={{ pointerEvents: 'none', background: 'rgba(0,0,0,0.8)', color: 'white', padding: '4px 8px', borderRadius: '4px', border: '1px solid #00f3ff', whiteSpace: 'nowrap' }}>
+        <Html distanceFactor={12} position={[0, height + 1, 0]}>
+          <div style={{ 
+            background: 'rgba(0,0,0,0.9)', 
+            border: `1px solid ${glowColor}`, 
+            color: glowColor, 
+            padding: '8px', 
+            borderRadius: '4px',
+            fontSize: '12px',
+            fontFamily: 'Orbitron, sans-serif',
+            boxShadow: `0 0 10px ${glowColor}`
+          }}>
+            <strong>{type.toUpperCase()} UNIT</strong><br/>
             Plot #{id}
           </div>
         </Html>
@@ -69,62 +122,64 @@ const LandPlot = ({ position, id, isSelected, onClick }) => {
   );
 };
 
-// --- COMPONENT: The Main Scene ---
-export default function VirtualLandMap() {
+// --- MAIN SCENE ---
+export default function VirtualCity() {
   const [selectedPlot, setSelectedPlot] = useState(null);
 
-  // Generate Grid Data
-  const plots = [];
-  for (let x = 0; x < GRID_SIZE; x++) {
-    for (let z = 0; z < GRID_SIZE; z++) {
-      plots.push({
-        id: `${x}-${z}`,
-        position: [
-          (x - GRID_SIZE / 2) * (PLOT_SIZE + GAP), 
-          0, 
-          (z - GRID_SIZE / 2) * (PLOT_SIZE + GAP)
-        ]
-      });
+  // Generate City Data (Only once)
+  const cityData = useMemo(() => {
+    const plots = [];
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        // Randomly decide if this plot has a building
+        const rand = Math.random();
+        let type = 'empty';
+        let height = 0;
+
+        if (rand > 0.85) {
+          type = 'commercial'; // Rare Skyscrapers
+          height = Math.random() * 2 + 1.5; // Tall
+        } else if (rand > 0.6) {
+          type = 'residential'; // Common Buildings
+          height = Math.random() * 0.8 + 0.5; // Short
+        }
+
+        plots.push({
+          id: `${x}-${z}`,
+          position: [(x - GRID_SIZE / 2) * (PLOT_SIZE + GAP), 0, (z - GRID_SIZE / 2) * (PLOT_SIZE + GAP)],
+          type,
+          height
+        });
+      }
     }
-  }
+    return plots;
+  }, []);
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#050505' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#000' }}>
       
       {/* UI Overlay */}
-      <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 10, color: 'white', fontFamily: 'sans-serif' }}>
-        <h1 style={{ margin: 0, fontSize: '2rem', textTransform: 'uppercase', letterSpacing: '2px' }}>Aetheria Map</h1>
-        <p style={{ color: '#888' }}>Select a plot to view details.</p>
-        
-        {selectedPlot ? (
-          <div style={{ marginTop: '20px', padding: '15px', background: 'rgba(255,255,255,0.1)', border: '1px solid #bd00ff', borderRadius: '8px' }}>
-            <strong>Selected: Plot #{selectedPlot}</strong><br/>
-            Price: 2.5 ETH<br/>
-            Owner: Available<br/>
-            <button style={{ marginTop: '10px', padding: '8px 16px', background: '#bd00ff', color: 'white', border: 'none', cursor: 'pointer' }}>
-              BUY NOW
-            </button>
-          </div>
-        ) : (
-          <div style={{ marginTop: '20px', color: '#555' }}>
-            No plot selected
-          </div>
-        )}
+      <div style={{ position: 'absolute', top: 30, left: 30, zIndex: 10, pointerEvents: 'none' }}>
+        <h1 style={{ color: '#fff', fontFamily: 'sans-serif', textTransform: 'uppercase', letterSpacing: '4px', fontSize: '2.5rem', textShadow: '0 0 20px #00aaff' }}>
+          Neon<span style={{color: '#bd00ff'}}>City</span>
+        </h1>
       </div>
 
-      {/* 3D Canvas */}
-      <Canvas camera={{ position: [8, 8, 8], fov: 50 }}>
-        {/* Lighting */}
-        <ambientLight intensity={0.5} />
-        <pointLight position={[10, 10, 10]} intensity={1} color="#00f3ff" />
-        <pointLight position={[-10, 10, -10]} intensity={0.5} color="#bd00ff" />
-
-        {/* Environment */}
-        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+      <Canvas>
+        <PerspectiveCamera makeDefault position={[12, 12, 12]} fov={45} />
         
-        {/* Render Grid */}
+        {/* Cinematic Lighting */}
+        <ambientLight intensity={0.2} />
+        <pointLight position={[10, 10, 10]} intensity={1.5} color="#00aaff" />
+        <pointLight position={[-10, 5, -10]} intensity={1.5} color="#bd00ff" />
+        
+        {/* Environment Effects */}
+        <fog attach="fog" args={['#050505', 5, 30]} /> {/* Fade into darkness */}
+        <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade />
+        
+        {/* The City Grid */}
         <group>
-          {plots.map((plot) => (
+          {cityData.map((plot) => (
             <LandPlot 
               key={plot.id} 
               {...plot} 
@@ -134,20 +189,34 @@ export default function VirtualLandMap() {
           ))}
         </group>
 
-        {/* Camera Controls */}
+        {/* Shiny Floor Reflection */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]}>
+          <planeGeometry args={[100, 100]} />
+          <meshStandardMaterial 
+            color="#000" 
+            mirror={1} 
+            blur={[500, 100]} 
+            mixBlur={12} 
+            mixStrength={1.5} 
+            roughness={0.1} 
+            metalness={1} 
+          />
+        </mesh>
+
         <OrbitControls 
           enablePan={true} 
           enableZoom={true} 
-          maxPolarAngle={Math.PI / 2.2} // Prevent going under the ground
+          maxPolarAngle={Math.PI / 2.1} 
           minDistance={5}
-          maxDistance={20}
+          maxDistance={30}
+          autoRotate={true}
+          autoRotateSpeed={0.5}
         />
-        
-        {/* Optional: Floor Reflection for extra style */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.2, 0]}>
-          <planeGeometry args={[50, 50]} />
-          <meshStandardMaterial color="#050505" mirror={1} roughness={0.1} metalness={0.8} />
-        </mesh>
+
+        {/* POST PROCESSING: The Glow Effect */}
+        <EffectComposer>
+          <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} height={300} intensity={1.5} />
+        </EffectComposer>
       </Canvas>
     </div>
   );
