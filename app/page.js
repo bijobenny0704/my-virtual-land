@@ -1,57 +1,85 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Sky, Stars, Html, PerspectiveCamera } from '@react-three/drei';
+import { MapControls, Html, OrthographicCamera } from '@react-three/drei';
+import * as THREE from 'three';
+import { Delaunay } from 'd3-delaunay';
 
 // --- CONFIGURATION ---
-const GRID_SIZE = 15; 
-const PLOT_SIZE = 1.0;
-const GAP = 0.05;
+const MAP_SIZE = 100; // Total map area
+const LAND_COUNT = 100; // Number of plots
 
-// --- COMPONENT: Natural Land Plot ---
-const LandPlot = ({ position, id, type, onClick, isSelected }) => {
-  const [hovered, setHover] = useState(false);
+// --- HELPER: Random Name Generator ---
+const generateLandName = (id) => {
+  const names = ["Greenwood", "Sunnyvale", "Riverdale", "Highland", "Westside", "Oakwood", "Maple", "Cedar", "Pine", "Elm"];
+  const types = ["District", "Estate", "Heights", "Park", "Grove", "Gardens"];
+  return `${names[id % names.length]} ${types[id % types.length]} ${id}`;
+};
 
-  // Natural Color Palette
-  const colors = {
-    grass: "#4d7c0f",    // Forest Green
-    dirt: "#78350f",     // Earthy Brown
-    water: "#0ea5e9",    // Sky Blue
-    selected: "#facc15"  // Yellow highlight
-  };
+// --- COMPONENT: Single Land Polygon ---
+const LandPolygon = ({ shape, color, name, isSelected, onClick }) => {
+  // Safety check: If shape is broken, don't render it
+  if (!shape || shape.length < 3) return null;
 
-  const currentColor = isSelected ? colors.selected : hovered ? "#65a30d" : colors[type];
+  // Convert 2D points to 3D shape
+  const threeShape = useMemo(() => {
+    const s = new THREE.Shape();
+    s.moveTo(shape[0][0], shape[0][1]);
+    for (let i = 1; i < shape.length; i++) {
+      s.lineTo(shape[i][0], shape[i][1]);
+    }
+    s.closePath();
+    return s;
+  }, [shape]);
+
+  // Create the geometry
+  const geometry = useMemo(() => new THREE.ShapeGeometry(threeShape), [threeShape]);
 
   return (
-    <group position={position}>
-      <mesh
-        onClick={(e) => { e.stopPropagation(); onClick(id); }}
-        onPointerOver={() => setHover(true)}
-        onPointerOut={() => setHover(false)}
+    <group>
+      {/* The Land Mass */}
+      <mesh 
+        geometry={geometry} 
+        rotation={[-Math.PI / 2, 0, 0]} 
+        onClick={(e) => { e.stopPropagation(); onClick(); }}
+        position={[0, 0, 0]}
       >
-        <boxGeometry args={[PLOT_SIZE, type === 'water' ? 0.05 : 0.2, PLOT_SIZE]} />
         <meshStandardMaterial 
-          color={currentColor} 
-          roughness={0.8}
-          metalness={0.1}
+          color={isSelected ? "#4285F4" : color} // Google Blue for selection
+          roughness={1}
+          metalness={0}
         />
       </mesh>
 
-      {hovered && (
-        <Html distanceFactor={10} position={[0, 0.5, 0]}>
+      {/* The Border Line (Street Effect) */}
+      <line rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={shape.length + 1}
+            array={new Float32Array([...shape.flat(), ...shape[0]])} 
+            itemSize={2}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="#dadce0" linewidth={1} /> {/* Light Grey Border */}
+      </line>
+
+      {/* Label on Selection */}
+      {isSelected && (
+        <Html position={[shape[0][0], 2, shape[0][1]]} center zIndexRange={[100, 0]}>
           <div style={{ 
             background: 'white', 
-            color: '#333', 
-            padding: '4px 8px', 
-            borderRadius: '4px',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none'
+            padding: '8px 12px', 
+            borderRadius: '4px', 
+            boxShadow: '0 2px 6px rgba(0,0,0,0.3)', 
+            fontFamily: 'Roboto, Arial, sans-serif',
+            textAlign: 'center',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap'
           }}>
-            {type.toUpperCase()} - Plot {id}
+            <strong style={{fontSize: '14px', color: '#202124'}}>{name}</strong>
+            <div style={{fontSize: '12px', color: '#70757a'}}>4.8 ★★★★☆</div>
           </div>
         </Html>
       )}
@@ -59,60 +87,93 @@ const LandPlot = ({ position, id, type, onClick, isSelected }) => {
   );
 };
 
-// --- MAIN SCENE ---
-export default function NaturalLandMap() {
-  const [selectedPlot, setSelectedPlot] = useState(null);
+// --- MAIN APP ---
+export default function GoogleMapClone() {
+  const [selectedId, setSelectedId] = useState(null);
+  const [zoom, setZoom] = useState(15); // Controls camera zoom
 
-  const landData = useMemo(() => {
-    const plots = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      for (let z = 0; z < GRID_SIZE; z++) {
-        // Simple logic to create a "river" or "lake" feel
-        let type = 'grass';
-        if (x < 3 || z > 12) type = 'water';
-        else if (Math.random() > 0.9) type = 'dirt';
+  // Generate Map Data (Voronoi)
+  const lands = useMemo(() => {
+    // 1. Generate Random Points
+    const points = Array.from({ length: LAND_COUNT }, () => [
+      (Math.random() - 0.5) * MAP_SIZE, 
+      (Math.random() - 0.5) * MAP_SIZE
+    ]);
 
-        plots.push({
-          id: `${x}-${z}`,
-          position: [(x - GRID_SIZE / 2) * (PLOT_SIZE + GAP), 0, (z - GRID_SIZE / 2) * (PLOT_SIZE + GAP)],
-          type
-        });
-      }
-    }
-    return plots;
-  }, []);
+    // 2. Create Shapes
+    const delaunay = Delaunay.from(points);
+    const voronoi = delaunay.voronoi([-MAP_SIZE/2, -MAP_SIZE/2, MAP_SIZE/2, MAP_SIZE/2]);
+
+    // 3. Convert to Data Objects
+    return points.map((point, i) => {
+      const polygon = voronoi.cellPolygon(i);
+      
+      // Google Maps Logic: Randomly assign Park (Green) vs City (Grey/White)
+      const isPark = Math.random() > 0.85; 
+      
+      return {
+        id: i,
+        name: generateLandName(i),
+        shape: polygon, // Can be null if out of bounds
+        color: isPark ? "#C5E8C5" : "#F8F9FA" // Google Park Green vs Land White
+      };
+    });
+  }, []); // Run once on load
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#87ceeb' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#AADAFF' }}> {/* Google Water Blue */}
       
-      {/* UI Overlay */}
-      <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 10 }}>
-        <h1 style={{ margin: 0, color: '#1e3a8a', fontFamily: 'sans-serif' }}>Greenfield Reserve</h1>
-        <p style={{ color: '#1e40af' }}>Select a plot to view land details.</p>
+      {/* Search Bar UI */}
+      <div style={{ 
+        position: 'absolute', top: 20, left: 20, zIndex: 10, 
+        background: 'white', padding: '10px 15px', borderRadius: '8px', 
+        boxShadow: '0 2px 6px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: '10px'
+      }}>
+        <div style={{ width: '20px', height: '20px', background: '#aaa', borderRadius: '50%' }}></div>
+        <span style={{ fontFamily: 'Arial', color: '#555' }}>Search Google Maps...</span>
       </div>
 
-      <Canvas shadows>
-        <PerspectiveCamera makeDefault position={[10, 10, 10]} fov={50} />
+      <Canvas shadows dpr={[1, 2]}>
+        {/* Orthographic Camera = "Flat" Map View */}
+        <OrthographicCamera makeDefault position={[0, 50, 0]} zoom={zoom} near={-100} far={200} />
         
-        {/* Natural Lighting */}
-        <Sky sunPosition={[100, 20, 100]} />
-        <ambientLight intensity={0.7} />
-        <pointLight position={[10, 10, 10]} intensity={1} />
-        
-        {/* The Map */}
+        {/* Lighting (Bright Day) */}
+        <ambientLight intensity={0.9} />
+        <directionalLight position={[10, 20, 5]} intensity={0.5} />
+
+        {/* Render Lands */}
         <group>
-          {landData.map((plot) => (
-            <LandPlot 
-              key={plot.id} 
-              {...plot} 
-              isSelected={selectedPlot === plot.id}
-              onClick={setSelectedPlot}
+          {lands.map((land) => (
+            <LandPolygon 
+              key={land.id}
+              {...land}
+              isSelected={selectedId === land.id}
+              onClick={() => setSelectedId(land.id)}
             />
           ))}
         </group>
 
-        <OrbitControls makeDefault minDistance={5} maxDistance={25} />
+        {/* Controls: Pan & Zoom like a Map */}
+        <MapControls 
+          enableRotate={false} // Lock rotation for 2D feel
+          zoomSpeed={0.5}
+          panSpeed={1}
+          minZoom={10}
+          maxZoom={50}
+        />
       </Canvas>
+
+      {/* Zoom Buttons UI */}
+      <div style={{ position: 'absolute', bottom: 30, right: 30, display: 'flex', flexDirection: 'column', gap: '5px' }}>
+        <button onClick={() => setZoom(z => Math.min(z + 5, 50))} style={btnStyle}>+</button>
+        <button onClick={() => setZoom(z => Math.max(z - 5, 10))} style={btnStyle}>-</button>
+      </div>
     </div>
   );
 }
+
+const btnStyle = {
+  width: '40px', height: '40px', background: 'white', border: 'none', 
+  borderRadius: '4px', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', 
+  cursor: 'pointer', fontSize: '20px', color: '#666'
+};
